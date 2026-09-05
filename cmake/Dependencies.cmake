@@ -28,7 +28,7 @@ set(GGML_METAL_EMBED_LIBRARY ${PCNSF_METAL_EMBED_LIBRARY}
 # by KakaruHayate/ggml-audio-patch (ggml_conv_direct_1d / *_fused /
 # ggml_add_leaky_relu).  "No patches applied here" was true when hifigan.cpp
 # was I/O-only; it is false now.  We vendor a byte-identical snapshot of the
-# 8 shipped patches into ./patches/ and have FetchContent apply them
+# 9 shipped patches into ./patches/ and have FetchContent apply them
 # idempotently on every configure.  Keeping them as files (not a ggml fork)
 # preserves the D2 intent: ggml remains stock upstream, the diff lives here.
 #
@@ -43,12 +43,13 @@ set(_pcnsf_ggml_patch_5 "${_pcnsf_ggml_patch_dir}/vulkan-pipeline-cache-ggml0190
 set(_pcnsf_ggml_patch_6 "${_pcnsf_ggml_patch_dir}/metal-conv-direct-1d-ggml0190.patch")
 set(_pcnsf_ggml_patch_7 "${_pcnsf_ggml_patch_dir}/audio-op-fixes-ggml0190.patch")
 set(_pcnsf_ggml_patch_8 "${_pcnsf_ggml_patch_dir}/cpu-direct-conv-alignment-ggml0190.patch")
+set(_pcnsf_ggml_patch_9 "${_pcnsf_ggml_patch_dir}/vulkan-device-policy-ggml0190.patch")
 set(_pcnsf_ggml_alias_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/metal-im2col-support.patch")
 set(_pcnsf_patch_args "-DGGML_PATCH_METAL_IM2COL=${_pcnsf_ggml_alias_patch}")
-foreach(_i RANGE 1 8)
+foreach(_i RANGE 1 9)
     list(APPEND _pcnsf_patch_args "-DGGML_PATCH_${_i}=${_pcnsf_ggml_patch_${_i}}")
 endforeach()
-foreach(_p IN ITEMS "${_pcnsf_ggml_patch_1}" "${_pcnsf_ggml_patch_2}" "${_pcnsf_ggml_patch_3}" "${_pcnsf_ggml_patch_4}" "${_pcnsf_ggml_patch_5}" "${_pcnsf_ggml_patch_6}" "${_pcnsf_ggml_patch_7}" "${_pcnsf_ggml_patch_8}" "${_pcnsf_ggml_alias_patch}")
+foreach(_p IN ITEMS "${_pcnsf_ggml_patch_1}" "${_pcnsf_ggml_patch_2}" "${_pcnsf_ggml_patch_3}" "${_pcnsf_ggml_patch_4}" "${_pcnsf_ggml_patch_5}" "${_pcnsf_ggml_patch_6}" "${_pcnsf_ggml_patch_7}" "${_pcnsf_ggml_patch_8}" "${_pcnsf_ggml_patch_9}" "${_pcnsf_ggml_alias_patch}")
     if(NOT EXISTS "${_p}")
         message(FATAL_ERROR "ggml patch snapshot missing: ${_p} — sync the vendored snapshot from KakaruHayate/ggml-audio-patch (patches/)")
     endif()
@@ -82,6 +83,7 @@ unset(_pcnsf_patch_result)
 unset(_pcnsf_ggml_alias_patch)
 unset(_pcnsf_ggml_patch_7)
 unset(_pcnsf_ggml_patch_8)
+unset(_pcnsf_ggml_patch_9)
 unset(_pcnsf_ggml_patch_dir)
 unset(_pcnsf_ggml_patch_1)
 unset(_pcnsf_ggml_patch_2)

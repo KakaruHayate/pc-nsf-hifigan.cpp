@@ -46,14 +46,47 @@ support for `CONV_DIRECT_1D` (including simdgroup-matrix capability). Unsupporte
 Metal devices keep the im2col path. `PCNSF_DIRECT_CONV=1` cannot bypass these
 requirements. `PCNSF_DIRECT_CONV=0` disables direct convolution for comparison.
 
-The eight-patch stack is verified before ggml configuration on every CMake run,
+The nine-patch stack is verified before ggml configuration on every CMake run,
 including populated build trees and `FETCHCONTENT_SOURCE_DIR_GGML` overrides.
 A small compatibility backfill handles old trees missing Metal's im2col alias.
 Patch 7 fixes CPU/Vulkan scatter index bounds, transposed-convolution padding,
 and CPU direct-convolution weight/bias strides.
+Patch 9 fixes Vulkan device-memory selection and checks convolution tile
+requirements against the device's workgroup and shared-memory limits.
 
 
 ## Vulkan / CUDA
+
+Enable Vulkan with `-DPCNSF_VULKAN=ON` and set `VULKAN_SDK` to your SDK
+installation before configuring. For example, in PowerShell:
+
+```powershell
+$env:VULKAN_SDK = 'C:/VulkanSDK/1.4.341.1'
+cmake -S . -B build-vulkan -DPCNSF_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-vulkan --config Release --parallel
+```
+
+Discrete GPUs now prefer device-only VRAM, using the existing staging transfers
+for uploads/downloads. Host-visible device-local memory remains a fallback if
+the device lacks a device-only type or its allocation fails. UMA devices keep
+their host-visible allocation policy. This avoids the severe shader-throughput
+regression reproduced on Windows/RTX 4060 when using mapped-capable VRAM; it
+does not change convolution arithmetic or select a different precision.
+
+`GGML_VK_PREFER_HOST_VISIBLE_VIDMEM=1` restores the previous preference for
+controlled device-specific comparisons. Existing `GGML_VK_PREFER_HOST_MEMORY`,
+`GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM` and `GGML_VK_ALLOW_SYSMEM_FALLBACK`
+overrides retain their roles. These switches are presence-based: unset them
+for normal operation; assigning `0` does not disable them.
+
+F32 direct-convolution tiles now respect device limits. Devices limited to
+128 workgroup invocations or 16 KiB of shared memory use a smaller tile instead
+of attempting the 256-thread, 18,560-byte tile. The arithmetic uses ordinary
+F32 shader operations and does not require NVIDIA matrix-core extensions.
+Apple Silicon's Metal selection and implementation are unchanged.
+
+See [the Vulkan performance investigation](docs/vulkan_device_memory.md) for
+measurements, reproducible checks and the hardware validation boundaries.
 
 Libraries and executables auto-detect and link. Runtime requirements:
 

@@ -1,0 +1,162 @@
+diff --git a/src/ggml-vulkan/ggml-vulkan.cpp b/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml-vulkan.h"
++#include "ggml-vulkan-device-policy.hpp"
+ #include <vulkan/vulkan_core.h>
+ #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
+ #include <chrono>
+@@ -1141,6 +1142,7 @@
+ 
+     bool disable_fusion;
+     bool disable_host_visible_vidmem;
++    bool prefer_host_visible_vidmem;
+     bool allow_sysmem_fallback;
+     bool disable_graph_optimize;
+ 
+@@ -3623,17 +3625,9 @@
+ }
+ 
+ static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
+-    std::vector<uint32_t> indices;
+-
+-    for (uint32_t i = 0; i < mem_props->memoryTypeCount; ++i) {
+-        vk::MemoryType memory_type = mem_props->memoryTypes[i];
+-        if ((mem_req->memoryTypeBits & ((uint64_t)1 << i)) &&
+-            (flags & memory_type.propertyFlags) == flags &&
+-            mem_props->memoryHeaps[memory_type.heapIndex].size >= mem_req->size) {
+-            indices.push_back(i);
+-        }
+-    }
+-    return indices;
++    return ggml_vk_memory_type_indices(static_cast<const VkPhysicalDeviceMemoryProperties &>(*mem_props),
++                                      static_cast<const VkMemoryRequirements &>(*mem_req),
++                                      static_cast<VkMemoryPropertyFlags>(flags));
+ }
+ 
+ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std::initializer_list<vk::MemoryPropertyFlags> & req_flags_list,
+@@ -3815,7 +3809,8 @@
+             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
+                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+-        } else if (device->disable_host_visible_vidmem) {
++        } else if (ggml_vk_prefer_device_only_memory(device->uma,
++                    device->prefer_host_visible_vidmem, device->disable_host_visible_vidmem)) {
+             if (device->allow_sysmem_fallback) {
+                 buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+                                                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+@@ -6417,6 +6412,7 @@
+ 
+         const char* GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM = getenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM");
+         device->disable_host_visible_vidmem = GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM != nullptr;
++        device->prefer_host_visible_vidmem = getenv("GGML_VK_PREFER_HOST_VISIBLE_VIDMEM") != nullptr;
+ 
+         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
+         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
+@@ -11855,16 +11851,16 @@
+             // w128 (two t-tiles per workgroup) amortizes the per-chunk
+             // barrier/staging machinery over twice the output — the chunked
+             // phase structure is the dominant fixed cost, so it wins for the
+-            // big levels.  (Variant set tuned as a whole on RTX 2070-class
+-            // hardware; pick by OC only, no vendor-specific assumptions.)
+-            const int64_t OC = dst->ne[1];
+-            if (OC <= 16) {
+-                return ctx->device->pipeline_conv_direct_1d_f32_e16;
+-            }
+-            if (OC <= 32) {
+-                return ctx->device->pipeline_conv_direct_1d_f32_e32;
+-            }
+-            return ctx->device->pipeline_conv_direct_1d_f32_w128;
++            // big levels. Respect shared-memory and workgroup limits before
++            // choosing a tile; smaller devices keep a supported variant.
++            switch (ggml_vk_select_conv_direct_variant(dst->ne[1], ctx->device->properties.limits)) {
++                case ggml_vk_conv_direct_variant::e16:  return ctx->device->pipeline_conv_direct_1d_f32_e16;
++                case ggml_vk_conv_direct_variant::e32:  return ctx->device->pipeline_conv_direct_1d_f32_e32;
++                case ggml_vk_conv_direct_variant::e64:  return ctx->device->pipeline_conv_direct_1d_f32_e64;
++                case ggml_vk_conv_direct_variant::w128: return ctx->device->pipeline_conv_direct_1d_f32_w128;
++                case ggml_vk_conv_direct_variant::none: return nullptr;
++            }
++            return nullptr;
+         }
+         return nullptr;
+     case GGML_OP_SCATTER_ELEMENTS:
+@@ -19090,7 +19086,9 @@
+                     const int32_t * cdp = (const int32_t *) op->op_params;
+                     const int64_t K    = w->ne[0];
+                     const int64_t halo = (K - 1) * (int64_t) cdp[1];
+-                    return K >= 3 && halo <= 72;
++                    return K >= 3 && cdp[1] > 0 && halo <= 72 &&
++                           ggml_vk_select_conv_direct_variant(op->ne[1], device->properties.limits) !=
++                               ggml_vk_conv_direct_variant::none;
+                 }
+             }
+         case GGML_OP_SCATTER_ELEMENTS:
+diff --git a/src/ggml-vulkan/ggml-vulkan-device-policy.hpp b/src/ggml-vulkan/ggml-vulkan-device-policy.hpp
+new file mode 100644
+--- /dev/null
++++ b/src/ggml-vulkan/ggml-vulkan-device-policy.hpp
+@@ -0,0 +1,63 @@
++#pragma once
++
++#include <vulkan/vulkan_core.h>
++#include <algorithm>
++#include <cstdint>
++#include <vector>
++
++// Device-local does not imply device-only: some drivers expose a CPU-visible
++// device-local type with much lower shader throughput. Keep it as a fallback,
++// but rank device-only types first when the caller needs no host access.
++inline std::vector<uint32_t> ggml_vk_memory_type_indices(
++        const VkPhysicalDeviceMemoryProperties & properties,
++        const VkMemoryRequirements & requirements, VkMemoryPropertyFlags flags) {
++    std::vector<uint32_t> indices;
++    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
++        const auto & type = properties.memoryTypes[i];
++        if ((requirements.memoryTypeBits & (uint32_t{1} << i)) &&
++            (type.propertyFlags & flags) == flags &&
++            properties.memoryHeaps[type.heapIndex].size >= requirements.size) {
++            indices.push_back(i);
++        }
++    }
++    if (flags == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
++        std::stable_partition(indices.begin(), indices.end(), [&](uint32_t i) {
++            return !(properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
++        });
++    }
++    return indices;
++}
++
++inline bool ggml_vk_prefer_device_only_memory(bool uma, bool prefer_host_visible,
++                                              bool disable_host_visible) {
++    return !uma && (disable_host_visible || !prefer_host_visible);
++}
++
++enum class ggml_vk_conv_direct_variant { none, e16, e32, e64, w128 };
++
++// Match conv_direct_1d.comp: weights BM*(BK/2+1) vec2, the circular
++// XS_ROWS*(BN+XS_HALO) float window, and two BK/2 uvec2 decode tables.
++constexpr uint32_t ggml_vk_conv_direct_shared_bytes(uint32_t bm, uint32_t bn) {
++    constexpr uint32_t bk = 32, rows = 12, halo = 72;
++    return bm * (bk / 2 + 1) * 2 * sizeof(float)
++         + rows * (bn + halo) * sizeof(float)
++         + 2 * (bk / 2) * 2 * sizeof(uint32_t);
++}
++
++inline ggml_vk_conv_direct_variant ggml_vk_select_conv_direct_variant(
++        int64_t output_channels, const VkPhysicalDeviceLimits & limits) {
++    const auto supported = [&](uint32_t threads, uint32_t bm, uint32_t bn) {
++        return threads <= limits.maxComputeWorkGroupInvocations &&
++               threads <= limits.maxComputeWorkGroupSize[0] &&
++               ggml_vk_conv_direct_shared_bytes(bm, bn) <= limits.maxComputeSharedMemorySize;
++    };
++    if (output_channels <= 16 && supported(128, 16, 64)) return ggml_vk_conv_direct_variant::e16;
++    if (output_channels <= 32 && supported(128, 32, 64)) return ggml_vk_conv_direct_variant::e32;
++    if (supported(256, 64, 128)) return ggml_vk_conv_direct_variant::w128;
++    // Vulkan's minimum 16 KiB shared memory / 128 threads can run e64,
++    // even though the preferred w128 tile needs 18,560 bytes / 256 threads.
++    if (supported(128, 64, 64)) return ggml_vk_conv_direct_variant::e64;
++    if (supported(128, 32, 64)) return ggml_vk_conv_direct_variant::e32;
++    if (supported(128, 16, 64)) return ggml_vk_conv_direct_variant::e16;
++    return ggml_vk_conv_direct_variant::none;
++}

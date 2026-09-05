@@ -78,7 +78,7 @@ build/bin/hifigan_cli hifigan_f32.gguf mel.bin f0.bin out.wav
 ### 贡献者
 
 - **无量化路径** — 本仓库**刻意不量化**：vocoder 对数值敏感，仅保留 F16/F32；未来 fp16 训练试点先在 torch 侧验证
-- **依赖策略（D2-修订,2026-08-30）** — 上游不接受的 ggml 修改 → 进 `ggml-patch`（补丁集）。**修订**：本仓库 vocoder 主体现已消费补丁提供的新算子（`ggml_conv_direct_1d[_fused]`、`ggml_add_leaky_relu`），故 8 枚补丁快照（learned ops、qvac ops、Metal ops、Vulkan direct convolution / pipeline cache、Metal direct convolution、音频算子正确性/工作区对齐修复）vendored 于 `./patches/`，在 FetchContent 拉取 stock ggml v0.19.0 后由 `cmake/ApplyGgmlPatches.cmake` 幂等打上。干净 checkout 全平台免手工可构建；本地已手工打过补丁的目录树会被识别并收养（stamp: `.pcnsf-patches/`)。补丁收益见 `docs/benchmarks.md`
+- **依赖策略（D2-修订,2026-08-30）** — 上游不接受的 ggml 修改放在补丁集中。本仓库消费补丁提供的新算子（`ggml_conv_direct_1d[_fused]`、`ggml_add_leaky_relu`），9 枚补丁保存在 `./patches/`，每次配置时由 `cmake/ApplyGgmlPatches.cmake` 幂等应用到 stock ggml v0.19.0，并支持已有构建目录升级。第 9 枚修复 Vulkan 显存选择及卷积分块的设备限制，详见[调查与验证记录](docs/vulkan_device_memory.md)。已手工打过补丁的目录树会被识别并收养（stamp: `.pcnsf-patches/`）。
 - **提交前过数值门槛** — 提交前跑 `tests/` golden 对比（`gen_hifigan_golden.py` + CTest t01/t02），wav 输出须与 torch 参考一致
 - **mininsf 源同步** — source generator 改动在 `libmininsf` 仓库，本仓库只消费（FetchContent）
 

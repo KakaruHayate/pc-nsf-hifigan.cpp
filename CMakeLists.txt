@@ -109,6 +109,9 @@ if(PCNSF_BUILD_CLI)
     add_executable(test_conv_direct tools/test_conv_direct.cpp)
     target_link_libraries(test_conv_direct PRIVATE pc_nsf_hifigan::pc_nsf_hifigan)
     target_compile_options(test_conv_direct PRIVATE ${PCNSF_WARN_FLAGS})
+    add_executable(vocoder_probe tools/vocoder_probe.cpp)
+    target_link_libraries(vocoder_probe PRIVATE pc_nsf_hifigan::pc_nsf_hifigan)
+    target_compile_options(vocoder_probe PRIVATE ${PCNSF_WARN_FLAGS})
 endif()
 
 # -----------------------------------------------------------------------------

@@ -8,7 +8,7 @@ from pathlib import Path
 
 def run(command, cwd=None):
     """Capture a command, including diagnostic output on failure."""
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True, errors="replace")
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     return result.stdout
@@ -62,19 +62,22 @@ FetchContent_MakeAvailable(ggml)
         assert not (stamps / "GGML_PATCH_6.stamp").exists()
         # Simulate builds predating the Metal IM2COL_FAST_1D support fix too.
         device = source / "src/ggml-metal/ggml-metal-device.m"
-        device.write_text(device.read_text().replace("        case GGML_OP_IM2COL_FAST_1D:\n", ""))
+        device.write_text(device.read_text(encoding="utf-8").replace("        case GGML_OP_IM2COL_FAST_1D:\n", ""), encoding="utf-8")
         cmakelists.write_text(common + '\ninclude(cmake/Dependencies.cmake)\n')
         deps = root / "cmake/Dependencies.cmake"
-        deps.write_text(deps.read_text().replace("https://github.com/ggerganov/ggml.git", stock.as_posix()))
+        deps.write_text(deps.read_text(encoding="utf-8").replace("https://github.com/ggerganov/ggml.git", stock.as_posix()), encoding="utf-8")
         configure += [f"-DFETCHCONTENT_SOURCE_DIR_MININSF={args.mininsf}",
                       f"-DFETCHCONTENT_SOURCE_DIR_POCKETFFT={args.pocketfft}",
                       f"-DFETCHCONTENT_SOURCE_DIR_DR_LIBS={args.dr_libs}"]
         run(configure)
-        for patch in ["6", "7", "8", "METAL_IM2COL"]:
+        for patch in ["6", "7", "8", "9", "METAL_IM2COL"]:
             assert (stamps / f"GGML_PATCH_{patch}.stamp").exists(), patch
-        assert "case GGML_OP_IM2COL_FAST_1D:" in device.read_text()
-        assert "kernel_conv_direct_1d_f32_64x64" in (source / "src/ggml-metal/ggml-metal.metal").read_text()
-        assert "int64_t scatter_index = idx" in (source / "src/ggml-cpu/ops.cpp").read_text()
+        assert "case GGML_OP_IM2COL_FAST_1D:" in device.read_text(encoding="utf-8")
+        assert "kernel_conv_direct_1d_f32_64x64" in (source / "src/ggml-metal/ggml-metal.metal").read_text(encoding="utf-8")
+        assert "int64_t scatter_index = idx" in (source / "src/ggml-cpu/ops.cpp").read_text(encoding="utf-8")
+        vulkan = source / "src/ggml-vulkan"
+        assert "ggml_vk_select_conv_direct_variant" in (vulkan / "ggml-vulkan.cpp").read_text(encoding="utf-8")
+        assert "ggml_vk_memory_type_indices" in (vulkan / "ggml-vulkan-device-policy.hpp").read_text(encoding="utf-8")
         assert "0 applied" in run(configure)
         print("Populated five-patch build upgraded; second configure is idempotent")
 
